@@ -1,14 +1,15 @@
 # /// script
 # dependencies = [
+#     "altair==6.2.2",
 #     "marimo",
-#     "polars==1.43.0",
+#     "polars==1.43.2",
 # ]
 # requires-python = ">=3.14"
 # ///
 
 import marimo
 
-__generated_with = "0.23.15"
+__generated_with = "0.23.16"
 app = marimo.App(width="medium")
 
 
@@ -16,8 +17,9 @@ app = marimo.App(width="medium")
 def _():
     import polars as pl
     from enum import Enum, auto
+    import altair as alt
 
-    return Enum, pl
+    return Enum, alt, pl
 
 
 @app.cell
@@ -31,7 +33,7 @@ def _():
 
 
 @app.cell
-def _(Enum, can_df, mo, pl, us_df):
+def _(Enum, mo, pl):
     # setup the inputs
 
     _can_form_dict = {
@@ -98,7 +100,7 @@ def _(Enum, can_df, mo, pl, us_df):
         input_cols = {key: pl.Int32 for key in list(dict.fromkeys([k for k in _us_form_dict] + [k for k in _can_form_dict]))}
         calculated_cols = {key: pl.Int32 for key in ['total_assets', 'total_liabilities', 'net_position', 'total_revenues', 'total_government_transfers', 'net_financial_position']}
         ratio_cols = {key: pl.Float32 for key in ['financial_assets-to-liabilities', 'assets-to-liabilities', 'net_debt-to-total-revenues', 'interest-to-total_revenues', 'net_book-to-cost_of_tca', 'govt_transfers-to-total_revenues']}
-        metadata_cols = {'rounding': pl.String}
+        metadata_cols = {'rounding': pl.String, '_rounding': pl.Float32}
 
         schema = descriptive_cols | input_cols | calculated_cols | ratio_cols | metadata_cols
 
@@ -116,19 +118,19 @@ def _(Enum, can_df, mo, pl, us_df):
 
         def calculate_summaries(self):
             self.data['total_assets'] = self.data['current_assets'] + self.data['capital_assets']
-    
+
             if self.country is self.Country.CANADA:
                 self.data['total_liabilities'] = self.data['liabilities']
                 self.data['net_position'] = self.data['total_assets'] - self.data['total_liabilities']
                 self.data['total_revenues'] = self.data['revenues_total'] + self.data['other']
                 self.data['total_government_transfers'] = self.data['government_transfers'] + self.data['government_transfers_related_to_capital']
-        
+
             if self.country is self.Country.US:
                 self.data['total_liabilities'] = self.data['liabilities'] + self.data['deferred_inflows']
                 self.data['net_position'] = self.data['total_assets'] + self.data['deferred_outflows'] - self.data['total_liabilities']
                 self.data['total_government_transfers'] = self.data['operating_grants_and_contributions'] + self.data['capital_grants_and_contributions']
                 self.data['total_cost_of_tca'] = self.data['govt_assets_not_depreciated'] + self.data['govt_assets_being_depreciated'] + self.data['govt_other_assets'] + self.data['bus_assests_not_depreciated'] + self.data['bus_assets_being_depreciated'] + self.data['bus_other_assets']
-        
+
         def calculate_indicators(self):
             self.data['net_financial_position'] = self.data['current_assets'] - self.data['total_liabilities']
             def safe_divide(n, d):  # catch divide by zero
@@ -143,6 +145,14 @@ def _(Enum, can_df, mo, pl, us_df):
             self.data['net_book-to-cost_of_tca'] = safe_divide(self.data['net_book_tca'], self.data['total_cost_of_tca'])
             self.data['govt_transfers-to-total_revenues'] = safe_divide(self.data['total_government_transfers'], self.data['total_revenues'])
 
+        def calculate_rounding_scale(self):
+            _rounding_dict = {
+                'dollars': 1/1000,
+                'thousands': 1,
+                'millions': 1000,
+            }
+            self.data.update({'_rounding': _rounding_dict[self.data['rounding']]})
+
         def convert_to_dataframe(self, data={}):
             if len(data) == 0:
                 return pl.DataFrame(schema=self.schema)
@@ -151,9 +161,10 @@ def _(Enum, can_df, mo, pl, us_df):
             self.retype_data()
             self.calculate_summaries()
             self.calculate_indicators()
+            self.calculate_rounding_scale()
             self.data.update({key: None for key in self.schema if key not in self.data})
             return pl.DataFrame(data=self.data, schema=self.schema, strict=False)
-    
+
     # setup dataframes with typing
     input_df = Entry().convert_to_dataframe(data={})
 
@@ -177,25 +188,25 @@ def _(Enum, can_df, mo, pl, us_df):
         df = pl.read_csv(path, has_header=False)  # we can just read the csv, it's pretty small
         city = path.stem
         rounding = df[2, 6]
-    
+
         # check if second col contains "Canada" i.e. "N/A for Canada" -- this is maybe the best indicator I could find
         if df.select(pl.col('column_2').str.contains('Canada').any()).item():
             country = 'Canada'
             subset_df = (
-                can_df[[4,6,7,10,14,15,17,18,20,21,22], 3:] # only the input data -- matches the keys in _can_form_dict
-                    .with_columns(pl.col(pl.Utf8).str.strip_chars())  # trim all whitespace in strings
-                    .with_columns(pl.col(pl.Utf8).str.replace_all(',', ''))  # remove commas (thousands sep)
-                    .with_columns(pl.all().cast(pl.Int64))  # cast to int
+                df[[4,6,7,10,14,15,17,18,20,21,22], 3:] # only the input data -- matches the keys in _can_form_dict
+                 .with_columns(pl.col(pl.Utf8).str.strip_chars())  # trim all whitespace in strings
+                 .with_columns(pl.col(pl.Utf8).str.replace_all(',', ''))  # remove commas (thousands sep)
+                 .with_columns(pl.all().cast(pl.Int64))  # cast to int
             )
             keys = ['country', 'city', 'year'] + [*_can_form_dict.keys()] + ['rounding']
 
         else:
              country = 'US'
              subset_df = (
-                 us_df[[3,5,6,8,9,10,13,14,15,17,18,19,20,21,22,23,24], 4:] # only the input data -- matches the keys in _us_form_dict
-                     .with_columns(pl.col(pl.Utf8).str.strip_chars())  # trim all whitespace in strings
-                     .with_columns(pl.col(pl.Utf8).str.replace_all(',', ''))  # remove commas (thousands sep)
-                     .with_columns(pl.all().cast(pl.Int64))  # cast to int
+                 df[[3,5,6,8,9,10,13,14,15,17,18,19,20,21,22,23,24], 4:] # only the input data -- matches the keys in _us_form_dict
+                  .with_columns(pl.col(pl.Utf8).str.strip_chars())  # trim all whitespace in strings
+                  .with_columns(pl.col(pl.Utf8).str.replace_all(',', ''))  # remove commas (thousands sep)
+                  .with_columns(pl.all().cast(pl.Int64))  # cast to int
              )
              keys = ['country', 'city', 'year'] + [*_us_form_dict.keys()] + ['rounding']
 
@@ -243,14 +254,49 @@ def _(Enum, can_df, mo, pl, us_df):
 
 
 @app.cell
-def _(input_df):
-    print(input_df)
+def _(input_section):
+    input_section
     return
 
 
 @app.cell
-def _(input_section):
-    input_section
+def _(input_df, pl):
+    # because we smrt all input data is int32 and we can round that to the thousands easily
+    rounded_df = input_df.with_columns(pl.col(pl.Int32) * pl.col('_rounding'))
+    return (rounded_df,)
+
+
+@app.cell
+def _(alt, rounded_df):
+    chart = (
+        alt.Chart(rounded_df, title='Net Financial Position').mark_line().encode(
+            alt.X('year')
+                .axis(tickMinStep=1, grid=False)
+                .scale(domain=(2009,2030))
+                .title('Year'),
+            alt.Y('net_financial_position')
+                .title('Cumulative Surplus/Deficit [thousands of dollars]'),
+            color='city',
+        )
+    )
+    return (chart,)
+
+
+@app.cell
+def _(chart, mo):
+    cc = mo.ui.altair_chart(chart)
+    return (cc,)
+
+
+@app.cell
+def _(cc):
+    cc
+    return
+
+
+@app.cell
+def _(cc):
+    cc.value
     return
 
 
