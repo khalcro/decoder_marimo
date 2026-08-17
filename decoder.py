@@ -300,7 +300,7 @@ def _(alt, pl, rounded_df):
 
 
     charts = [
-        alt.Chart(rounded_df, title=_chart_title).mark_line().encode(
+        alt.Chart(rounded_df, title=_chart_title).mark_line(point=True).encode(
             alt.X('year')
                 .axis(tickMinStep=1, grid=False)  # tick marks every 1, no grid
                 .scale(domain=_year_scale, nice=True)  # use nice=True to pad the axis
