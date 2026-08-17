@@ -267,24 +267,66 @@ def _(input_df, pl):
 
 
 @app.cell
-def _(alt, rounded_df):
-    chart = (
-        alt.Chart(rounded_df, title='Net Financial Position').mark_line().encode(
+def _(alt, pl, rounded_df):
+    # select by city using the legend
+    _chart_selector = alt.selection_point(fields=['city'], bind='legend')
+    # bring the selected values to the front
+    _selected_on_top = alt.when(_chart_selector).then(alt.value(1)).otherwise(alt.value(0))
+    # make a legend scale so that entries don't get filtered out from the legend when clicked on in the legend (weird deadlock possible if this scale doesn't exist)
+    _legend_scale = alt.Scale(domain=rounded_df['city'].unique().to_list())
+    # make a year scale
+    _year_scale = (rounded_df['year'].min() - 0.5, rounded_df['year'].max() + 0.5)
+
+
+    _titles = [
+        "Net Financial Position (In Thousands of Dollars)",
+        "Financial Assets-to-Total Liabilities",
+        "Total Assets-To-Total Liabilities",
+        "Net Debt-to-Total Revenues",
+        "Interest-to-Total Revenues",
+        "Net Book Value-to-Cost of Tangible Capital Assets",
+        "Government Transfers-to-Total Revenues"
+    ]
+    _y_data_keys = rounded_df.select(('net_financial_position', pl.col(pl.Float32))).drop('_rounding').columns
+    _y_titles = [
+        "Cumulative Surplus/Deficit (Thousands of Dollars)",
+        "Ratio (Financial Assets:Total Liabilities)",
+        "Ratio (Total Assets:Total Liabilities)",
+        "Ratio (Net Debt:Total Revenues)",
+        "Percentage (Revenue Spent on Interest)",
+        "Percentage (Current Value of Assets to Original Cost)",
+        "Percentage (City's Income from State or Fed. Aid)",
+    ]
+
+
+    charts = [
+        alt.Chart(rounded_df, title=_chart_title).mark_line().encode(
             alt.X('year')
-                .axis(tickMinStep=1, grid=False)
-                .scale(domain=(2009,2030))
+                .axis(tickMinStep=1, grid=False)  # tick marks every 1, no grid
+                .scale(domain=_year_scale, nice=True)  # use nice=True to pad the axis
                 .title('Year'),
-            alt.Y('net_financial_position')
-                .title('Cumulative Surplus/Deficit [thousands of dollars]'),
-            color='city',
+            alt.Y(_y_data)
+                .axis(format=('%' if 'Percentage' in _y_title else ',.3r'))
+                .scale(zero=False, nice=True)
+                .title(_y_title),
+            alt.Color('city', scale=_legend_scale),
+            order=_selected_on_top,
         )
-    )
-    return (chart,)
+        .add_params(
+            _chart_selector if i ==0 else alt.param()  # only create the selector once!
+        )
+        .transform_filter(
+            _chart_selector  # filter out non-selected data
+        )
+        for i, (_chart_title, _y_data, _y_title) in enumerate(zip(_titles, _y_data_keys, _y_titles))
+    ]
+
+    return (charts,)
 
 
 @app.cell
-def _(chart, mo):
-    cc = mo.ui.altair_chart(chart)
+def _(alt, charts, mo):
+    cc = mo.ui.altair_chart(alt.hconcat(*(alt.vconcat(*charts[0:4]), alt.vconcat(*charts[4:7]))))
     return (cc,)
 
 
