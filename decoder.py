@@ -27,8 +27,8 @@ def _():
     # TODO
     ## upload csv from ST decoder  DONE
     ## parse existing dataset for locales
-    ## plot multiple locales against each other
-    ## handle rounding value
+    ## plot multiple locales against each other DONE
+    ## handle rounding value DONE
     return
 
 
