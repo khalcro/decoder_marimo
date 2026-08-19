@@ -301,18 +301,6 @@ def _(input_section):
 
 
 @app.cell
-def _(us_form_df):
-    us_form_df
-    return
-
-
-@app.cell
-def _(can_form_df):
-    can_form_df
-    return
-
-
-@app.cell
 def _(
     can_form_getter,
     manual_entry_callback,
@@ -325,7 +313,7 @@ def _(
     us_form_df = manual_entry_callback(us_form_getter())
     upload_df = upload_callback(upload_form)
     input_df = pl.concat((can_form_df, us_form_df, upload_df))
-    return can_form_df, input_df, us_form_df
+    return (input_df,)
 
 
 @app.cell
