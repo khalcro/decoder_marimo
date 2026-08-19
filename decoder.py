@@ -31,6 +31,8 @@ def _():
     ## plot multiple locales against each other DONE
     ## handle rounding value DONE
     ## remove all callbacks and use marimo native reactivity!!!!!! DONE
+    ## adjust _repo_data_path.exists() b/c on wasm it's a URLpath that doesn't have the method!
+    ## fix double input, right now we just use unique() to paper over the issue
     return
 
 
@@ -235,9 +237,10 @@ def _(Enum, Path, mo, pl):
     us_form_getter, us_form_setter = mo.state([])
 
     def _form_validator(manual_form):
-        if all(isinstance(val, int) for key, val in manual_form.items() if key not in ['country', 'rounding']):
-            return
-        else:
+        # try to coerce all numerical inputs to int format
+        try:
+            list(map(int, [val for key, val in manual_form.items() if key not in ['country', 'city', 'rounding']]))
+        except ValueError:
             return "Fill out all entries before submitting"
 
     can_form = _make_form_markdown('can').batch(
@@ -312,7 +315,7 @@ def _(
     can_form_df = manual_entry_callback(can_form_getter())
     us_form_df = manual_entry_callback(us_form_getter())
     upload_df = upload_callback(upload_form)
-    input_df = pl.concat((can_form_df, us_form_df, upload_df))
+    input_df = pl.concat((can_form_df.unique(), us_form_df.unique(), upload_df.unique()))
     return (input_df,)
 
 
