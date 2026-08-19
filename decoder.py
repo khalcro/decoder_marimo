@@ -9,17 +9,18 @@
 
 import marimo
 
-__generated_with = "0.23.16"
-app = marimo.App(width="medium")
+__generated_with = "0.24.0"
+app = marimo.App(width="full")
 
 
 @app.cell
 def _():
-    import polars as pl
     from enum import Enum, auto
+    from pathlib import Path
+    import polars as pl
     import altair as alt
 
-    return Enum, alt, pl
+    return Enum, Path, alt, pl
 
 
 @app.cell
@@ -29,11 +30,12 @@ def _():
     ## parse existing dataset for locales
     ## plot multiple locales against each other DONE
     ## handle rounding value DONE
+    ## remove all callbacks and use marimo native reactivity!!!!!! DONE
     return
 
 
 @app.cell
-def _(Enum, mo, pl):
+def _(Enum, Path, mo, pl):
     # setup the inputs
 
     _can_form_dict = {
@@ -114,7 +116,7 @@ def _(Enum, mo, pl):
             self.country = getattr(self.Country, country_str.upper())
 
         def retype_data(self):
-            self.data.update({key: int(val) for key, val in self.data.items() if self.schema[key] != pl.String})
+            self.data.update({key: int(val) for key, val in self.data.items() if self.schema[key] != pl.String and val is not None})
 
         def calculate_summaries(self):
             self.data['total_assets'] = self.data['current_assets'] + self.data['capital_assets']
@@ -154,6 +156,10 @@ def _(Enum, mo, pl):
             self.data.update({'_rounding': _rounding_dict[self.data['rounding']]})
 
         def convert_to_dataframe(self, data={}):
+            """
+            take the input data dictionary and convert it to a polars dataframe
+            :param data: dict, can be empty to return empty dataframe
+            """
             if len(data) == 0:
                 return pl.DataFrame(schema=self.schema)
             self.data = data
@@ -165,26 +171,32 @@ def _(Enum, mo, pl):
             self.data.update({key: None for key in self.schema if key not in self.data})
             return pl.DataFrame(data=self.data, schema=self.schema, strict=False)
 
-    # setup dataframes with typing
-    input_df = Entry().convert_to_dataframe(data={})
 
-    def append_form_input(form):
-        new_df = Entry().convert_to_dataframe(data=form)
+    def manual_entry_callback(manual_form_list):
+        """
+        converts the data from the manual entry form to a dataframe
+        """
+        if len(manual_form_list) > 0:
+            new_df = pl.concat((Entry().convert_to_dataframe(data=manual_form)) for manual_form in manual_form_list)
+        else:
+            new_df = Entry().convert_to_dataframe(data={})
+        return new_df
 
-        global input_df
-        input_df.vstack(new_df, in_place=True)
-
-    def browser_callback(filebrowser_form_input):
-        filebrowser = filebrowser_form_input['_input_section']
-        if len(filebrowser) > 0:
-            [read_csv(fb) for fb in filebrowser]
+    def upload_callback(filebrowser_form):
+        filebrowser = filebrowser_form.value
+        if filebrowser is None:
+            return Entry().convert_to_dataframe(data={})
+        sources = filebrowser['_input_section']
+        if len(sources) > 0:
+            source_dfs = [read_csv(s) for s in sources]
+        return pl.concat(source_dfs, how='vertical')
 
     def read_csv(file_obj):
         """
         reads the input csv, and feeds into the existing framework
         """
         # common work
-        path = file_obj.path
+        path = Path(file_obj.name)
         df = pl.read_csv(path, has_header=False)  # we can just read the csv, it's pretty small
         city = path.stem
         rounding = df[2, 6]
@@ -210,38 +222,49 @@ def _(Enum, mo, pl):
              )
              keys = ['country', 'city', 'year'] + [*_us_form_dict.keys()] + ['rounding']
 
+        series = []
         for cc in subset_df.iter_columns():
             if not cc.is_null().any():  # check if we're missing any data
-                data = [country, city, *cc.to_list(), rounding]
-                append_form_input(dict(zip(keys, data)))
+                vals = [country, city, *cc.to_list(), rounding]
+                series.append(Entry().convert_to_dataframe(data=dict(zip(keys, vals))))
+            else:
+                series.append(Entry().convert_to_dataframe({}))
+        return pl.concat(series, how='vertical')
 
+    can_form_getter, can_form_setter = mo.state([])
+    us_form_getter, us_form_setter = mo.state([])
 
-    _can_form = _make_form_markdown('can').batch(
+    def _form_validator(manual_form):
+        if all(isinstance(val, int) for key, val in manual_form.items() if key not in ['country', 'rounding']):
+            return
+        else:
+            return "Fill out all entries before submitting"
+
+    can_form = _make_form_markdown('can').batch(
         country=mo.ui.text(label='Country', value='Canada', disabled=True),
         city=mo.ui.text(label='City'),
         year=mo.ui.text(label='Year'),
         **{key: mo.ui.text(label=value) for key, value in _can_form_dict.items()},
         rounding=mo.ui.radio(options=['dollars', 'thousands', 'millions'], value='dollars', label='Report Rounding', inline=True)
-    ).form(show_clear_button=True, bordered=False, on_change=append_form_input)
+    ).form(show_clear_button=True, bordered=False, clear_on_submit=True, validate=_form_validator)
 
-    _us_form = _make_form_markdown('us').batch(
+    us_form = _make_form_markdown('us').batch(
         country=mo.ui.text(label='Country', value='US', disabled=True),
         city=mo.ui.text(label='City'),
         year=mo.ui.text(label='Year'),
         **{key: mo.ui.text(label=value) for key, value in _us_form_dict.items()},
         rounding=mo.ui.radio(options=['dollars', 'thousands', 'millions'], value='dollars', label='Report Rounding', inline=True)
-    ).form(show_clear_button=True, bordered=False, on_change=append_form_input)
+    ).form(show_clear_button=True, bordered=False, clear_on_submit=True, validate=_form_validator)
 
-    _upload_form = mo.md(
+    upload_form = mo.md(
         """
         Upload a spreadsheet downloaded from the strongtowns finance decoder worksheet in csv form
         {_input_section}
         """).batch(
-        _input_section=mo.ui.file_browser(filetypes=['.csv'], label='Select an exported csv. Filename will be used as the city/locale name.')).form(
-            bordered=False, on_change=browser_callback)
+        _input_section=mo.ui.file(filetypes=['.csv'], multiple=True, kind='area', label='Select an exported csv. Filename will be used as the city/locale name.')).form(bordered=False)
 
-    input_section = mo.accordion({'Input new': mo.ui.tabs({'Canada': _can_form, 'US': _us_form}),
-                                 'Upload ST csv file': _upload_form})
+    input_section = mo.accordion({'Input new': mo.ui.tabs({'Canada': can_form, 'US': us_form}),
+                                 'Upload ST csv file': upload_form})
 
 
 
@@ -250,13 +273,59 @@ def _(Enum, mo, pl):
         existing_df_lazy = pl.scan_parquet(_repo_data_path)
     else:
         existing_df_lazy = pl.LazyFrame(schema=Entry().convert_to_dataframe(data={}).schema)
-    return input_df, input_section
+    return (
+        can_form,
+        can_form_getter,
+        can_form_setter,
+        input_section,
+        manual_entry_callback,
+        upload_callback,
+        upload_form,
+        us_form,
+        us_form_getter,
+        us_form_setter,
+    )
+
+
+@app.cell
+def _(can_form, can_form_setter, us_form, us_form_setter):
+    can_form_setter(lambda v: v + [can_form.value] if can_form.value is not None else v)
+    us_form_setter(lambda v: v + [us_form.value] if us_form.value is not None else v)
+    return
 
 
 @app.cell
 def _(input_section):
     input_section
     return
+
+
+@app.cell
+def _(us_form_df):
+    us_form_df
+    return
+
+
+@app.cell
+def _(can_form_df):
+    can_form_df
+    return
+
+
+@app.cell
+def _(
+    can_form_getter,
+    manual_entry_callback,
+    pl,
+    upload_callback,
+    upload_form,
+    us_form_getter,
+):
+    can_form_df = manual_entry_callback(can_form_getter())
+    us_form_df = manual_entry_callback(us_form_getter())
+    upload_df = upload_callback(upload_form)
+    input_df = pl.concat((can_form_df, us_form_df, upload_df))
+    return can_form_df, input_df, us_form_df
 
 
 @app.cell
@@ -267,7 +336,8 @@ def _(input_df, pl):
 
 
 @app.cell
-def _(alt, pl, rounded_df):
+def _(alt, mo, pl, rounded_df):
+    mo.stop(len(rounded_df) == 0, mo.md('**upload files to see graphs**'))
     # select by city using the legend
     _chart_selector = alt.selection_point(fields=['city'], bind='legend')
     # bring the selected values to the front
@@ -320,7 +390,6 @@ def _(alt, pl, rounded_df):
         )
         for i, (_chart_title, _y_data, _y_title) in enumerate(zip(_titles, _y_data_keys, _y_titles))
     ]
-
     return (charts,)
 
 
