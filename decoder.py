@@ -2,6 +2,8 @@
 # dependencies = [
 #     "altair==6.2.2",
 #     "marimo",
+#     "pandas==3.0.5",
+#     "pandas==3.0.5; sys_platform == 'emscripten'",
 #     "polars==1.43.2",
 # ]
 # requires-python = ">=3.14"
@@ -19,8 +21,18 @@ def _():
     from pathlib import Path
     import polars as pl
     import altair as alt
+    import gzip
+    import sys
 
-    return Enum, Path, alt, pl
+    return Enum, Path, alt, gzip, pl, sys
+
+
+@app.cell
+def _(sys):
+    if sys.platform == "emscripten":
+        # Running in WebAssembly (Pyodide)
+        import pandas as pd  # only necessary on wasm b/c polars can't read parquet on wasm
+    return (pd,)
 
 
 @app.cell
@@ -37,7 +49,7 @@ def _():
 
 
 @app.cell
-def _(Enum, Path, mo, pl):
+def _(Enum, Path, gzip, mo, pd, pl, sys):
     # setup the inputs
 
     _can_form_dict = {
@@ -199,7 +211,12 @@ def _(Enum, Path, mo, pl):
         """
         # common work
         path = Path(file_obj.name)
-        df = pl.read_csv(path, has_header=False)  # we can just read the csv, it's pretty small
+        if sys.platform == "emscripten":
+            # Running in WebAssembly (Pyodide)
+            df = pl.read_csv(file_obj.contents, has_header=False)  # read the contents of the upload
+        else:
+            # running locally
+            df = pl.read_csv(path, has_header=False)  # read the file, it's pretty small
         city = path.stem
         rounding = df[2, 6]
 
@@ -272,10 +289,19 @@ def _(Enum, Path, mo, pl):
 
 
     _repo_data_path = mo.notebook_location() / 'public' / 'decoded.parquet'
-    if _repo_data_path.exists():
-        existing_df_lazy = pl.scan_parquet(_repo_data_path)
+
+    if sys.platform == "emscripten":
+        # Running in WebAssembly (Pyodide)
+        try:
+            existing_df = pl.from_pandas(pd.read_parquet(_repo_data_path))
+        except gzip.BadGzipFile:
+            existing_df = pl.DataFrame(schema=Entry().convert_to_dataframe(data=()).schema)
     else:
-        existing_df_lazy = pl.LazyFrame(schema=Entry().convert_to_dataframe(data={}).schema)
+        # running locally
+        if _repo_data_path.exists():
+            existing_df = pl.read_parquet(_repo_data_path, has_header=False)
+        else:
+            existing_df = Entry().convert_to_dataframe(data={})
     return (
         can_form,
         can_form_getter,
