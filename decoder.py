@@ -3,7 +3,7 @@
 #     "altair==6.2.2",
 #     "marimo",
 #     "pandas==3.0.5",
-#     "pandas==3.0.5; sys_platform == 'emscripten'",
+#     "pyarrow==22.0.0; sys_platform == 'emscripten'",
 #     "polars==1.43.2",
 # ]
 # requires-python = ">=3.14"
